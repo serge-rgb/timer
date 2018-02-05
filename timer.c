@@ -295,18 +295,6 @@ fname_at_binary(char* fname, sz lenFname) {
    strncat(fname, buffer, lenFname);
 }
 
-void
-set_high_res(GLFWwindow* win) {
-   // The current version of GLFW does not seem to do this right on my macbook
-
-   NSWindow* nsWindow = glfwGetCocoaWindow(win);
-
-   if ([[nsWindow contentView] respondsToSelector:@selector(setWantsBestResolutionOpenGLSurface:)]) {
-            [[nsWindow contentView] setWantsBestResolutionOpenGLSurface:YES];
-   }
-
-}
-
 #endif // __MACH__
 
 void
@@ -367,7 +355,6 @@ main() {
       else {
          glfwSetKeyCallback(window, key_callback);
          glfwMakeContextCurrent(window);
-//         set_high_res(window);
          glfwSwapInterval(1);
 
          struct nk_context* nk = nk_glfw3_init(window, NK_GLFW3_INSTALL_CALLBACKS);
