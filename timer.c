@@ -33,7 +33,7 @@ err=$?
 if [ $err = 0 ]; then
    mkdir -p build/Timer.app/Contents/MacOS
    mkdir -p build/Timer.app/Contents/Resources
-   cp bundle/Info.plist build/Timer.app/Contents/Info.plist
+   cp Info.plist build/Timer.app/Contents/Info.plist
    cp DroidSans.ttf build/Timer.app/Contents/MacOS/DroidSans.ttf
    cp icons/timer.icns build/Timer.app/Contents/Resources/Timer.icns
    mv build/timer build/Timer.app/Contents/MacOS/timer
