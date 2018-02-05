@@ -9,3 +9,12 @@ I don't think anyone other than me will ever use it, but I am making open source
 - clang
 - imagemagick for generating icons
 - macos only for now but that will probably change soon
+
+## Building
+
+It's a self building C-file. Do 
+
+```
+./timer.c
+```
+and after it's done, there should be a `build/Timer.app` bundle.
