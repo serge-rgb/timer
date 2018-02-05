@@ -395,8 +395,16 @@ main() {
                           n >= 0 && distance < gui.lookbackDistance_s;
                           --n) {
                         TimeBlock* b = &state->blocks[n];
+                        u64 begin = b->begin + TimerEpoch;
                         distance = now - (b->begin + TimerEpoch);
-                        timeSum += b->duration;
+                        if (distance - b->duration < gui.lookbackDistance_s) {
+                           int diff = 0; {
+                              if (gui.lookbackDistance_s < distance) {
+                                 diff = distance - gui.lookbackDistance_s;
+                              }
+                           }
+                           timeSum += b->duration - diff;
+                        }
                      }
                   }
                   char elapsedMsg[MsgLen] = Zero; {
