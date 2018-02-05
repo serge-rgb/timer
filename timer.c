@@ -8,30 +8,42 @@ glfw_lib=glfw/build/src/libglfw3.a
 
 
 if [ ! -f $glfw_lib ]; then
-   ./build.sh
+   pushd glfw
+   if [ ! -d build ]; then
+   mkdir build
+   fi
+   pushd build
+   cmake .. -DCMAKE_BUILD_TYPE=Debug -DCMAKE_C_FLAGS=-g -DGLFW_USE_RETINA=1 -DGLFW_EXPOSE_NATIVE_COCOA=1
+   make -j
+   popd
+   popd
 fi
 
 cflags="-ObjC -g -Iglfw/include -framework Cocoa -framework OpenGL -framework IOKit -framework CoreVideo"
 
 clang $cflags timer.c $glfw_lib -o build/timer
 
-exit
+if [ ! -f icons/timer.icns ]; then
+   cd icons
+   ./mkicons.sh
+   cd ..
+fi
+
+err=$?
+if [ $err = 0 ]; then
+   mkdir -p build/Timer.app/Contents/MacOS
+   mkdir -p build/Timer.app/Contents/Resources
+   cp bundle/Info.plist build/Timer.app/Contents/Info.plist
+   cp DroidSans.ttf build/Timer.app/Contents/MacOS/DroidSans.ttf
+   cp icons/timer.icns build/Timer.app/Contents/Resources/Timer.icns
+   mv build/timer build/Timer.app/Contents/MacOS/timer
+fi
+
+
+exit $err
 
 #endif
 
-
-
-// C std lib.
-#include <assert.h>
-#include <limits.h>
-#include <math.h>
-#include <math.h>
-#include <stdarg.h>
-#include <stdint.h>
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
-#include <time.h>
 
 // POSIX
 #include <errno.h>
@@ -40,13 +52,17 @@ exit
 #include <fcntl.h>
 #include <unistd.h>
 
-
-// macOS
-// #include <Cocoa/Cocoa.h>
-#include <AppKit/AppKit.h>
-
 // Local
 #include <GLFW/glfw3.h>
+
+// macOS
+#if defined(__MACH__)
+#include <AppKit/AppKit.h>
+#include <mach-o/dyld.h>
+#define GLFW_EXPOSE_NATIVE_COCOA
+#include <GLFW/glfw3native.h>
+#endif  // __MACH__
+
 
 typedef uint8_t   u8;
 typedef uint16_t  u16;
@@ -58,12 +74,21 @@ typedef size_t    sz;
 #ifndef bool
 typedef u32       bool;
 #endif
-
-#define Zero {0}
 #define true 1
 #define false 0
+#define Zero {0}
 #define MsgLen 10000
+#define Type(name) struct name; typedef struct name name
 
+#define Minutes(v) (v*60)
+#define Hours(v) (Minutes(60*v))
+#define Days(v) (24*(Hours(v)))
+#define Weeks(v) (7*Days(v))
+#define Months(v) (30*Days(v))
+#define Years(v) (365.25f*Days(v))
+
+#define TimeBlockMinutes 25
+#define TimerEpoch 1517696211
 
 #define NK_INCLUDE_FIXED_TYPES
 #define NK_INCLUDE_STANDARD_IO
@@ -78,72 +103,62 @@ typedef u32       bool;
 #include "nuklear_glfw_gl2.h"
 
 
-#define TIMER_EPOCH 1517696211
-
 #pragma pack(push, 1)
-typedef struct TimeBlock_s {
-   u32 begin;  // timestamp relative to TIMER_EPOCH
-   u16 duration;
-} TimeBlock;
+   struct TimeBlock {
+      u32 begin;  // timestamp relative to TimerEpoch
+      u16 duration;
+   };
+   Type(TimeBlock);
 
-// 100 years of 32 daily blocks of time.
-#define BLOCK_COUNT (100 * 365 * 32)
+   // 100 years of 32 daily blocks of time.
+   #define BlockCount (100 * 365 * 32)
 
-typedef struct State_s {
-   TimeBlock blocks[BLOCK_COUNT];
-   i64       n_blocks;
-} State;
+   struct State {
+      TimeBlock blocks[BlockCount];
+      i64       n_blocks;
+   };
+   Type(State);
 #pragma pack(pop)
 
+enum blockFsm {
+   WAITING,
+   INSIDE_BLOCK,
+   ERROR,
+};
+struct GuiState {
+   u64 lookbackDistance_s;
+   int blockFsm;
+};
+Type(GuiState);
 
 void
-handle_errno_err(int err) {
-  switch(err) {
-#define ErrCase(err) case(err): { fprintf(stderr, "POSIX error: " #err "\n"); } break
-    ErrCase(E2BIG);
-    ErrCase(EACCES);
-    ErrCase(EBADF);
-    ErrCase(EBUSY);
-    ErrCase(ECHILD);
-    ErrCase(EDEADLK);
-    ErrCase(EEXIST);
-    ErrCase(EFAULT);
-    ErrCase(EFBIG);
-    ErrCase(EINTR);
-    ErrCase(EINVAL);
-    ErrCase(EIO);
-    ErrCase(EISDIR);
-    ErrCase(EMFILE);
-    ErrCase(EMLINK);
-    ErrCase(ENFILE);
-    ErrCase(ENODEV);
-    ErrCase(ENOENT);
-    ErrCase(ENOEXEC);
-    ErrCase(ENOMEM);
-    ErrCase(ENOSPC);
-    ErrCase(ENOTBLK);
-    ErrCase(ENOTDIR);
-    ErrCase(ENOTTY);
-    ErrCase(ENXIO);
-    ErrCase(EOVERFLOW);
-    ErrCase(EPERM);
-    ErrCase(EPIPE);
-    ErrCase(EROFS);
-    ErrCase(ESPIPE);
-    ErrCase(ESRCH);
-    ErrCase(ETXTBSY);
-    ErrCase(EXDEV);
-    default: {
-      fprintf(stderr, "unknown mmap error\n");
-    }
-#undef ErrCase
-  }
+init_gui_state(GuiState* gui) {
+   gui->lookbackDistance_s = Hours(8);
+   gui->blockFsm = WAITING;
 }
 
 void
-handle_errno() {
-  int err = errno;
-  handle_errno_err(err);
+print_errno_err(int err) {
+   switch(err) {
+#define ErrCase(err) case(err): { fprintf(stderr, "POSIX error: " #err "\n"); } break
+      ErrCase(E2BIG); ErrCase(EACCES); ErrCase(EBADF); ErrCase(EBUSY); ErrCase(ECHILD);
+      ErrCase(EDEADLK); ErrCase(EEXIST); ErrCase(EFAULT); ErrCase(EFBIG); ErrCase(EINTR);
+      ErrCase(EINVAL); ErrCase(EIO); ErrCase(EISDIR); ErrCase(EMFILE); ErrCase(EMLINK);
+      ErrCase(ENFILE); ErrCase(ENODEV); ErrCase(ENOENT); ErrCase(ENOEXEC); ErrCase(ENOMEM);
+      ErrCase(ENOSPC); ErrCase(ENOTBLK); ErrCase(ENOTDIR); ErrCase(ENOTTY); ErrCase(ENXIO);
+      ErrCase(EOVERFLOW); ErrCase(EPERM); ErrCase(EPIPE); ErrCase(EROFS); ErrCase(ESPIPE);
+      ErrCase(ESRCH); ErrCase(ETXTBSY); ErrCase(EXDEV);
+      default: {
+         fprintf(stderr, "unhandled POSIX error\n");
+      }
+#undef ErrCase
+   }
+}
+
+void
+print_errno() {
+   int err = errno;
+   print_errno_err(err);
 }
 
 // TODO: Write a stb-style library that handles OS paths seamlessly
@@ -152,40 +167,40 @@ State*
 open_database(char* fname) {
    State* s = NULL;
 
-   bool clear_mem = false;
-   off_t file_len = sizeof(State);
+   bool clearMem = false;
+   off_t fileLen = sizeof(State);
 
    int fd = open(fname, O_RDWR, S_IRWXU);
    if (fd == -1) {
-     int err = errno;
-     if (err != ENOENT) {
-       handle_errno_err(err);
-     }
-     else {
-       clear_mem = true;
-       fd = open(fname, O_RDWR | O_CREAT | O_TRUNC, S_IRWXU);
-       if (fd == -1) {
-         handle_errno();
-       }
-       else if (ftruncate (fd, file_len) == -1) {
-         handle_errno();
-         fd = -1;
-       }
-     }
+      int err = errno;
+      if (err != ENOENT) {
+         print_errno_err(err);
+      }
+      else {
+         clearMem = true;
+         fd = open(fname, O_RDWR | O_CREAT | O_TRUNC, S_IRWXU);
+         if (fd == -1) {
+            print_errno();
+         }
+         else if (ftruncate(fd, fileLen) == -1) {
+            print_errno();
+            fd = -1;
+         }
+      }
    }
 
    if (fd != -1) {
-     void* p = mmap(NULL, file_len, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
-     if (s == MAP_FAILED) {
-       handle_errno();
-     }
-     else {
-       s = p;
-       if (clear_mem) {
-         memset(s, 0, file_len);
-       }
-     }
-     close(fd);
+      void* p = mmap(NULL, fileLen, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+      if (s == MAP_FAILED) {
+         print_errno();
+      }
+      else {
+         s = p;
+         if (clearMem) {
+            memset(s, 0, fileLen);
+         }
+      }
+      close(fd);
    }
    return s;
 }
@@ -197,217 +212,296 @@ error(int error, const char* descr) {
 
 void
 key_callback(GLFWwindow* window, int key, int scancode, int action, int mods) {
-    if (key == GLFW_KEY_ESCAPE && action == GLFW_PRESS) {
-       glfwSetWindowShouldClose(window, GLFW_TRUE);
-    }
+   if (key == GLFW_KEY_ESCAPE && action == GLFW_PRESS) {
+      glfwSetWindowShouldClose(window, GLFW_TRUE);
+   }
 }
 
+void
+time_pretty_roughly(char* out, sz len, u64 sec) {
+   int val = sec;
+   char* s = "";
+   if (sec < Minutes(1)) {
+      s = "seconds";
+   }
+   else if (sec < Hours(1)) {
+      val /= Minutes(1);
+      s = "minutes";
+   }
+   else if (sec <  Days(1)) {
+      val /= Hours(1);
+      s = "hours";
+   }
+   else if (sec < Weeks(1)) {
+      val /= Days(1);
+      s = "days";
+   }
+   else if (sec < Months(1)) {
+      val /= Weeks(1);
+      s = "weeks";
+   }
+   else if (sec < Years(1)) {
+      val /= Months(1);
+      s = "months";
+   }
+   else {
+      val /= Years(1);
+      s = "years";
+   }
+   snprintf(out, len, "%d %s", val, s);
+}
 
 void
 time_pretty(char* out, sz len, u64 unix) {
-  u32 sec = unix % 60;
-  u32 min = (unix / 60) % 60;
-  u32 hr = (unix / (60*60));
-  snprintf(out, len, "%02d:%02d:%02d", hr, min, sec);
+   u32 sec = unix % 60;
+   u32 min = (unix / 60) % 60;
+   u32 hr  = (unix / (60*60));
+   snprintf(out, len, "%02d:%02d:%02d", hr, min, sec);
 }
 
+#if defined(__MACH__)
 NSAlert*
 mac_alert(const char* info, const char* title) {
-  NSAlert *alert = [[NSAlert alloc] init];
-  alert.messageText = [NSString stringWithUTF8String:title ? title : ""];
-  alert.informativeText = [NSString stringWithUTF8String:info ? info : ""];
-  return alert;
+   NSAlert *alert        = [[NSAlert alloc] init];
+   alert.messageText     = [NSString stringWithUTF8String:title ? title : ""];
+   alert.informativeText = [NSString stringWithUTF8String:info ? info : ""];
+   return alert;
 }
 
 void
-show_message_box(char* info, char* title)
-{
-  @autoreleasepool {
-    [mac_alert(info, title) runModal];
-  }
+show_message_box(char* info, char* title) {
+   @autoreleasepool {
+      [mac_alert(info, title) runModal];
+   }
 }
 
+void
+fname_at_binary(char* fname, sz lenFname) {
+   char buffer[MsgLen] = Zero; {
+      strncpy(buffer, fname, MsgLen);
+   }
+   u32 intLen = lenFname;
+   _NSGetExecutablePath(fname, &intLen);
+   /* Remove the executable name */ {
+      char* last_slash = fname;
+      for(char* iter = fname; *iter != '\0'; ++iter) {
+         if (*iter == '/') {
+            last_slash = iter;
+         }
+      }
+      *(last_slash+1) = '\0';
+   }
+   strncat(fname, "/", lenFname);
+   strncat(fname, buffer, lenFname);
+}
+
+void
+set_high_res(GLFWwindow* win) {
+   // The current version of GLFW does not seem to do this right on my macbook
+
+   NSWindow* nsWindow = glfwGetCocoaWindow(win);
+
+   if ([[nsWindow contentView] respondsToSelector:@selector(setWantsBestResolutionOpenGLSurface:)]) {
+            [[nsWindow contentView] setWantsBestResolutionOpenGLSurface:YES];
+   }
+
+}
+
+#endif // __MACH__
+
+void
+set_style(struct nk_context* nk) {
+   struct nk_color table[NK_COLOR_COUNT];
+   table[NK_COLOR_TEXT]                    = nk_rgba(70, 70, 70, 255);
+   table[NK_COLOR_WINDOW]                  = nk_rgba(175, 175, 175, 255);
+   table[NK_COLOR_HEADER]                  = nk_rgba(175, 175, 175, 255);
+   table[NK_COLOR_BORDER]                  = nk_rgba(0, 0, 0, 255);
+   table[NK_COLOR_BUTTON]                  = nk_rgba(185, 185, 185, 255);
+   table[NK_COLOR_BUTTON_HOVER]            = nk_rgba(170, 170, 170, 255);
+   table[NK_COLOR_BUTTON_ACTIVE]           = nk_rgba(160, 160, 160, 255);
+   table[NK_COLOR_TOGGLE]                  = nk_rgba(150, 150, 150, 255);
+   table[NK_COLOR_TOGGLE_HOVER]            = nk_rgba(120, 120, 120, 255);
+   table[NK_COLOR_TOGGLE_CURSOR]           = nk_rgba(175, 175, 175, 255);
+   table[NK_COLOR_SELECT]                  = nk_rgba(190, 190, 190, 255);
+   table[NK_COLOR_SELECT_ACTIVE]           = nk_rgba(175, 175, 175, 255);
+   table[NK_COLOR_SLIDER]                  = nk_rgba(190, 190, 190, 255);
+   table[NK_COLOR_SLIDER_CURSOR]           = nk_rgba(80, 80, 80, 255);
+   table[NK_COLOR_SLIDER_CURSOR_HOVER]     = nk_rgba(70, 70, 70, 255);
+   table[NK_COLOR_SLIDER_CURSOR_ACTIVE]    = nk_rgba(60, 60, 60, 255);
+   table[NK_COLOR_PROPERTY]                = nk_rgba(175, 175, 175, 255);
+   table[NK_COLOR_EDIT]                    = nk_rgba(150, 150, 150, 255);
+   table[NK_COLOR_EDIT_CURSOR]             = nk_rgba(0, 0, 0, 255);
+   table[NK_COLOR_COMBO]                   = nk_rgba(175, 175, 175, 255);
+   table[NK_COLOR_CHART]                   = nk_rgba(160, 160, 160, 255);
+   table[NK_COLOR_CHART_COLOR]             = nk_rgba(45, 45, 45, 255);
+   table[NK_COLOR_CHART_COLOR_HIGHLIGHT]   = nk_rgba( 255, 0, 0, 255);
+   table[NK_COLOR_SCROLLBAR]               = nk_rgba(180, 180, 180, 255);
+   table[NK_COLOR_SCROLLBAR_CURSOR]        = nk_rgba(140, 140, 140, 255);
+   table[NK_COLOR_SCROLLBAR_CURSOR_HOVER]  = nk_rgba(150, 150, 150, 255);
+   table[NK_COLOR_SCROLLBAR_CURSOR_ACTIVE] = nk_rgba(160, 160, 160, 255);
+   table[NK_COLOR_TAB_HEADER]              = nk_rgba(180, 180, 180, 255);
+   nk_style_from_table(nk, table);
+}
 
 int
 main() {
-  State* state = open_database("db");
-  if (!glfwInit()) {
-    fprintf(stderr, "Could not initialize GLFW.\n");
-  }
-  else if (!state) {
-    fprintf(stderr, "Could not open database.\n");
-  }
-  else {
-    int width = 400, height=300;
-    glfwSetErrorCallback(error);
-    glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 2);
-    glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 1);
-    GLFWwindow* window = glfwCreateWindow(width, height, "Timer", NULL, NULL);
-    if (!window) {
-      fprintf(stderr, "Could not create window.\n");
-    }
-    else {
-      // TODO: Need to load GL functions?
-      struct nk_colorf bg;
-
-      glfwSetKeyCallback(window, key_callback);
-      glfwMakeContextCurrent(window);
-      glfwSwapInterval(1);
-
-      struct nk_context* nk = nk_glfw3_init(window, NK_GLFW3_INSTALL_CALLBACKS);
-      {struct nk_font_atlas *atlas;
-        nk_glfw3_font_stash_begin(&atlas);
-        /*struct nk_font *droid = nk_font_atlas_add_from_file(atlas, "../../../extra_font/DroidSans.ttf", 14, 0);*/
-        /*struct nk_font *roboto = nk_font_atlas_add_from_file(atlas, "../../../extra_font/Roboto-Regular.ttf", 14, 0);*/
-        /*struct nk_font *future = nk_font_atlas_add_from_file(atlas, "../../../extra_font/kenvector_future_thin.ttf", 13, 0);*/
-        /*struct nk_font *clean = nk_font_atlas_add_from_file(atlas, "../../../extra_font/ProggyClean.ttf", 12, 0);*/
-        /*struct nk_font *tiny = nk_font_atlas_add_from_file(atlas, "../../../extra_font/ProggyTiny.ttf", 10, 0);*/
-        /*struct nk_font *cousine = nk_font_atlas_add_from_file(atlas, "../../../extra_font/Cousine-Regular.ttf", 13, 0);*/
-        nk_glfw3_font_stash_end();
-        /*nk_style_load_all_cursors(nk, atlas->cursors);*/
-        /*nk_style_set_font(nk, &droid->handle);*/}
-
-#ifdef INCLUDE_STYLE
-      /* set_style(nk, THEME_WHITE); */
-      set_style(nk, THEME_RED);
-      /*set_style(nk, THEME_BLUE);*/
-      /*set_style(nk, THEME_DARK);*/
-#endif
-      bg.r = 0.10f, bg.g = 0.18f, bg.b = 0.24f, bg.a = 1.0f;
-
-      enum BlockFsm {
-        WAITING,
-        INSIDE_BLOCK,
-        ERROR,
-      };
-      int blockfsm = WAITING;
-      time_t block_begin = Zero;
-
-      int bw1 = 125;
-      int* bw = &bw1;
-      while (!glfwWindowShouldClose(window)) {
-        u64 now = (u64)time(0);
-        /* Input */
-        glfwPollEvents();
-        nk_glfw3_new_frame();
-
-        /* GUI */
-        if (nk_begin(nk, "Timer", nk_rect(0, 0, width, height), 0)) {
-          static char* error_message = "undefined";
-          nk_layout_row_dynamic(nk, 30, 3);
-          nk_label(nk, "Timer", NK_TEXT_LEFT);
-          if (nk_button_label(nk, "more")) {
-            *bw += 5;
-            printf("bw is %d\n", *bw);
-          }
-          if (nk_button_label(nk, "less")) {
-            *bw -= 5;
-            printf("bw is %d\n", *bw);
-          }
-
-          if (blockfsm == WAITING) {
-            nk_layout_row_static(nk, 30, bw1, 1);
-            if (nk_button_label(nk, "Begin Time Block.")) {
-              blockfsm = INSIDE_BLOCK;
-              block_begin = time(0);
-            }
-            u64 timesum = 0; {
-              u64 distance = 0;
-              for (i64 n = state->n_blocks-1;
-                   n >= 0 && distance < 24*60*60;
-                   --n) {
-                TimeBlock* b = &state->blocks[n];
-                distance = now - (b->begin + TIMER_EPOCH);
-                timesum += b->duration;
-              }
-            }
-            char logmsg[MsgLen] = Zero;
-            char timestr[MsgLen] = Zero;
-            time_pretty(timestr, MsgLen, timesum);
-            snprintf(logmsg, MsgLen, "Time elapsed last 24 hours: %s", timestr);
-            nk_layout_row_dynamic(nk, 30, 1);
-            nk_label(nk, logmsg, NK_TEXT_CENTERED);
-          }
-          else if (blockfsm == INSIDE_BLOCK) {
-            bool end_block = false;
-            if (now - block_begin > 10) {
-              show_message_box("Time block done!", "Timer");
-              end_block = true;
-            }
-            /*draw elapsed time*/ {
-              nk_layout_row_dynamic(nk, 30, 1);
-              time_t now = time(NULL);
-              u32 relnow = now - block_begin;
-              char msg[MsgLen] = Zero;
-              time_pretty(msg,MsgLen, (u64)relnow);
-              nk_label(nk, msg, NK_TEXT_CENTERED);
-            }
-            nk_layout_row_static(nk, 30, bw1, 2);
-            if (nk_button_label(nk, "End Time Block.")) {
-              end_block = true;
-            }
-            if (end_block) {
-              if (now - block_begin >= 65536) {
-                blockfsm = ERROR;
-                error_message = "time block too long!";
-              }
-              else {
-                TimeBlock* block = &state->blocks[state->n_blocks++];
-                block->duration = now - block_begin;
-                block->begin = block_begin - TIMER_EPOCH;
-                blockfsm = WAITING;
-              }
-            }
-          }
-          else if (blockfsm == ERROR) {
-            nk_layout_row_dynamic(nk, 30, 2);
-            char errmsg[MsgLen] = Zero;
-            snprintf(errmsg, MsgLen, "Error: %s", error_message);
-            nk_label(nk, errmsg, NK_TEXT_CENTERED);
-            if (nk_button_label(nk, "Ok")) {
-              blockfsm = WAITING;
-            }
-          }
-
-#if ORIG_NK_DEMO
-          static int op = 1;
-          nk_layout_row_dynamic(nk, 30, 3);
-          if (nk_option_label(nk, "easy", op == 1)) op = 1;
-          if (nk_option_label(nk, "hard", op == 2)) op = 2;
-          if (nk_option_label(nk, "hardest", op == 3)) op = 3;
-
-          nk_layout_row_dynamic(nk, 25, 1);
-          nk_property_int(nk, "Compression:", 0, &property, 100, 10, 1);
-
-          nk_layout_row_dynamic(nk, 20, 1);
-          nk_label(nk, "background:", NK_TEXT_LEFT);
-          nk_layout_row_dynamic(nk, 25, 1);
-          if (nk_combo_begin_color(nk, nk_rgb_cf(bg), nk_vec2(nk_widget_width(nk),400))) {
-            nk_layout_row_dynamic(nk, 120, 1);
-            bg = nk_color_picker(nk, bg, NK_RGBA);
-            nk_layout_row_dynamic(nk, 25, 1);
-            bg.r = nk_propertyf(nk, "#R:", 0, bg.r, 1.0f, 0.01f,0.005f);
-            bg.g = nk_propertyf(nk, "#G:", 0, bg.g, 1.0f, 0.01f,0.005f);
-            bg.b = nk_propertyf(nk, "#B:", 0, bg.b, 1.0f, 0.01f,0.005f);
-            bg.a = nk_propertyf(nk, "#A:", 0, bg.a, 1.0f, 0.01f,0.005f);
-            nk_combo_end(nk);
-          }
-#endif
-        }
-        nk_end(nk);
-
-        /* Draw */
-        glfwGetWindowSize(window, &width, &height);
-        glViewport(0, 0, width, height);
-        glClear(GL_COLOR_BUFFER_BIT);
-        glClearColor(bg.r, bg.g, bg.b, bg.a);
-        nk_glfw3_render(NK_ANTI_ALIASING_ON);
-
-        glfwSwapBuffers(window);
+   char dbPath[MsgLen] = "db"; {
+      fname_at_binary(dbPath, MsgLen);
+   }
+   State* state = open_database(dbPath);
+   if (!glfwInit()) {
+      fprintf(stderr, "Could not initialize GLFW.\n");
+   }
+   else if (!state) {
+      fprintf(stderr, "Could not open database.\n");
+   }
+   else {
+      int width = 500, height=150;
+      glfwSetErrorCallback(error);
+      glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 2);
+      glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 1);
+      GLFWwindow* window = glfwCreateWindow(width, height, "Timer", NULL, NULL);
+      if (!window) {
+         fprintf(stderr, "Could not create window.\n");
       }
-      glfwDestroyWindow(window);
-    }
-  }
-  return 0;
+      else {
+         glfwSetKeyCallback(window, key_callback);
+         glfwMakeContextCurrent(window);
+//         set_high_res(window);
+         glfwSwapInterval(1);
+
+         struct nk_context* nk = nk_glfw3_init(window, NK_GLFW3_INSTALL_CALLBACKS);
+         /*NK font atlas*/ {
+            char fontPath[MsgLen] = "DroidSans.ttf"; {
+               fname_at_binary(fontPath, MsgLen);
+            }
+            struct nk_font_atlas *atlas;
+            nk_glfw3_font_stash_begin(&atlas);
+            struct nk_font *droid = nk_font_atlas_add_from_file(atlas, fontPath, 14, 0);
+            nk_glfw3_font_stash_end();
+            // nk_style_load_all_cursors(nk, atlas->cursors);
+            nk_style_set_font(nk, &droid->handle);
+         }
+
+         set_style(nk);
+
+         time_t blockBegin = Zero;
+
+         GuiState gui; {
+            init_gui_state(&gui);
+         }
+         static int buttonWidth = 135;
+
+         while (!glfwWindowShouldClose(window)) {
+            u64 now = (u64)time(0);
+            /* Input */
+            glfwPollEvents();
+            nk_glfw3_new_frame();
+
+            /* GUI */
+            if (nk_begin(nk, "Timer", nk_rect(0, 0, width, height), 0)) {
+               static char* errorMessage = "undefined";
+               if (gui.blockFsm == WAITING) {
+                  u64 timeSum = 0; {
+                     u64 distance = 0;
+                     for (i64 n = state->n_blocks-1;
+                          n >= 0 && distance < gui.lookbackDistance_s;
+                          --n) {
+                        TimeBlock* b = &state->blocks[n];
+                        distance = now - (b->begin + TimerEpoch);
+                        timeSum += b->duration;
+                     }
+                  }
+                  char elapsedMsg[MsgLen] = Zero; {
+                     char timeRoughly[MsgLen] = Zero; {
+                        time_pretty_roughly(timeRoughly, MsgLen, gui.lookbackDistance_s);
+                     }
+                     char timeStr[MsgLen] = Zero; {
+                        time_pretty(timeStr, MsgLen, timeSum);
+                     }
+                     snprintf(elapsedMsg, MsgLen, "Time elapsed past %s: %s", timeRoughly, timeStr);
+                  }
+                  // nk_layout_row_static(nk, 20, width, 0);  /*Vertical space*/
+                  nk_layout_row_begin(nk, NK_STATIC, 30, 4); {
+                     nk_layout_row_push(nk, 50);
+                     nk_label(nk, "Window:", NK_TEXT_LEFT);
+
+                     nk_layout_row_push(nk, 60);
+                     if (nk_button_label(nk, "More")) {
+                        gui.lookbackDistance_s *= 2;
+                     }
+                     nk_layout_row_push(nk, 60);
+                     if (nk_button_label(nk, "1 hour")) {
+                        gui.lookbackDistance_s = Hours(1);
+                     }
+
+                     nk_layout_row_push(nk, 250);
+                     nk_label(nk, elapsedMsg, NK_TEXT_CENTERED);
+                     nk_layout_row_end(nk);
+                  }
+
+                  nk_layout_row_dynamic(nk, 30, 1); {
+                     nk_label(nk, "Timer", NK_TEXT_LEFT);
+                  }
+
+                  nk_layout_row_static(nk, 30, buttonWidth, 1); {
+                     if (nk_button_label(nk, "Begin Time Block.")) {
+                        gui.blockFsm = INSIDE_BLOCK;
+                        blockBegin = time(0);
+                     }
+                  }
+               }
+               else if (gui.blockFsm == INSIDE_BLOCK) {
+                  bool endBlock = false;
+                  if (now - blockBegin > TimeBlockMinutes*60) {
+                     show_message_box("Time block done!", "Timer");
+                     endBlock = true;
+                  }
+                  /*draw elapsed time*/ {
+                     nk_layout_row_dynamic(nk, 30, 1);
+                     time_t now = time(NULL);
+                     u32 relnow = now - blockBegin;
+                     char msg[MsgLen] = Zero;
+                     time_pretty(msg,MsgLen, (u64)relnow);
+                     nk_label(nk, msg, NK_TEXT_CENTERED);
+                  }
+                  nk_layout_row_static(nk, 30, buttonWidth, 2);
+                  if (nk_button_label(nk, "End Time Block.")) {
+                     endBlock = true;
+                  }
+                  if (endBlock) {
+                     if (now - blockBegin >= 65536) {
+                        gui.blockFsm = ERROR;
+                        errorMessage = "time block too long!";
+                     }
+                     else {
+                        TimeBlock* block = &state->blocks[state->n_blocks++];
+                        block->duration = now - blockBegin;
+                        block->begin = blockBegin - TimerEpoch;
+                        gui.blockFsm = WAITING;
+                     }
+                  }
+               }
+               else if (gui.blockFsm == ERROR) {
+                  nk_layout_row_dynamic(nk, 30, 2);
+                  char errmsg[MsgLen] = Zero;
+                  snprintf(errmsg, MsgLen, "Error: %s", errorMessage);
+                  nk_label(nk, errmsg, NK_TEXT_CENTERED);
+                  if (nk_button_label(nk, "Ok")) {
+                     gui.blockFsm = WAITING;
+                  }
+               }
+            }
+            nk_end(nk);
+
+            /* Draw */
+            nk_glfw3_render(NK_ANTI_ALIASING_ON);
+
+            glfwSwapBuffers(window);
+         }
+         glfwDestroyWindow(window);
+      }
+   }
+   return 0;
 }
 

@@ -1,2 +1,4 @@
 build/
 glfw/build/
+icons/*.icns
+icons/*.iconset
