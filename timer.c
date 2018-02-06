@@ -165,7 +165,7 @@ print_errno() {
 // TODO: Memory mapping on Windows.
 State*
 open_database(char* fname) {
-   State* s = NULL;
+   State* state = NULL;
 
    bool clearMem = false;
    off_t fileLen = sizeof(State);
@@ -191,18 +191,18 @@ open_database(char* fname) {
 
    if (fd != -1) {
       void* p = mmap(NULL, fileLen, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
-      if (s == MAP_FAILED) {
+      if (p == MAP_FAILED) {
          print_errno();
       }
       else {
-         s = p;
+         state = p;
          if (clearMem) {
-            memset(s, 0, fileLen);
+            memset(state, 0, fileLen);
          }
       }
       close(fd);
    }
-   return s;
+   return state;
 }
 
 void
@@ -382,7 +382,7 @@ main() {
          while (!glfwWindowShouldClose(window)) {
             u64 now = (u64)time(0);
             /* Input */
-            glfwPollEvents();
+            glfwWaitEventsTimeout(0.5);
             nk_glfw3_new_frame();
 
             /* GUI */
