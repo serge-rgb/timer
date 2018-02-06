@@ -416,7 +416,7 @@ main() {
                      char timeStr[MsgLen] = Zero; {
                         time_pretty(timeStr, MsgLen, timeSum);
                      }
-                     snprintf(elapsedMsg, MsgLen, "Time elapsed past %s: %s", timeRoughly, timeStr);
+                     snprintf(elapsedMsg, MsgLen, "Time logged in past %s: %s", timeRoughly, timeStr);
                   }
                   // nk_layout_row_static(nk, 20, width, 0);  /*Vertical space*/
                   nk_layout_row_begin(nk, NK_STATIC, 30, 4); {
