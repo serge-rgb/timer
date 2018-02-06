@@ -13,13 +13,15 @@ if [ ! -f $glfw_lib ]; then
    mkdir build
    fi
    pushd build
-   cmake .. -DCMAKE_BUILD_TYPE=Debug -DCMAKE_C_FLAGS=-g -DGLFW_USE_RETINA=1 -DGLFW_EXPOSE_NATIVE_COCOA=1
+   #cmake .. -DCMAKE_BUILD_TYPE=Debug -DCMAKE_C_FLAGS=-g -DGLFW_USE_RETINA=1 -DGLFW_EXPOSE_NATIVE_COCOA=1
+   cmake .. -DCMAKE_BUILD_TYPE=Release -DGLFW_USE_RETINA=1 -DGLFW_EXPOSE_NATIVE_COCOA=1
    make -j
    popd
    popd
 fi
 
-cflags="-ObjC -g -Iglfw/include -framework Cocoa -framework OpenGL -framework IOKit -framework CoreVideo"
+# cflags="-ObjC -g -Iglfw/include -framework Cocoa -framework OpenGL -framework IOKit -framework CoreVideo"
+cflags="-ObjC -O2 -Iglfw/include -framework Cocoa -framework OpenGL -framework IOKit -framework CoreVideo"
 
 clang $cflags timer.c $glfw_lib -o build/timer
 
