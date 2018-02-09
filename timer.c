@@ -262,19 +262,16 @@ time_pretty(char* out, sz len, u64 unix) {
 }
 
 #if defined(__MACH__)
-NSAlert*
-mac_alert(const char* info, const char* title) {
-   NSAlert *alert        = [[NSAlert alloc] init];
-   alert.messageText     = [NSString stringWithUTF8String:title ? title : ""];
-   alert.informativeText = [NSString stringWithUTF8String:info ? info : ""];
-   return alert;
-}
-
 void
 show_message_box(char* info, char* title) {
-   @autoreleasepool {
-      [mac_alert(info, title) runModal];
+   static NSAlert *alert = NULL;
+   if (!alert)
+   {
+      alert = [[NSAlert alloc] init];
    }
+   alert.messageText     = [NSString stringWithUTF8String:title ? title : ""];
+   alert.informativeText = [NSString stringWithUTF8String:info ? info : ""];
+   [alert runModal];
 }
 
 void
