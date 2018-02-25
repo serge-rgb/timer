@@ -1,3 +1,11 @@
+/**
+ * timer.c - Sergio Gonzalez
+ *
+ * To-Do
+ * support for wide-char paths in windows
+ **/
+
+
 #if defined(BUILD_SCRIPT)
 
 if [ ! -d build ]; then
@@ -48,14 +56,20 @@ exit $err
 
 
 // POSIX
+#if defined(__MACH__) || defined(__linux__)
+#define POSIX 1
 #include <errno.h>
 #include <sys/types.h>
 #include <sys/mman.h>
 #include <fcntl.h>
 #include <unistd.h>
+#endif
 
-// Local
-#include <GLFW/glfw3.h>
+#if defined(_WIN32)
+#pragma warning(push, 0)
+#include <windows.h>
+#pragma waning(pop)
+#endif
 
 // macOS
 #if defined(__MACH__)
@@ -64,6 +78,9 @@ exit $err
 #define GLFW_EXPOSE_NATIVE_COCOA
 #include <GLFW/glfw3native.h>
 #endif  // __MACH__
+
+// Local
+#include <GLFW/glfw3.h>
 
 
 typedef uint8_t   u8;
@@ -101,8 +118,15 @@ typedef u32       bool;
 #define NK_INCLUDE_DEFAULT_FONT
 #define NK_GLFW_GL2_IMPLEMENTATION
 #define NK_IMPLEMENTATION
+
+#if defined(_WIN32)
+#pragma warning(push, 0)
+#endif
 #include "nuklear.h"
 #include "nuklear_glfw_gl2.h"
+#if defined(_WIN32)
+#pragma warning(pop)
+#endif // _WIN32
 
 
 #pragma pack(push, 1)
@@ -125,8 +149,9 @@ typedef u32       bool;
 enum blockFsm {
    WAITING,
    INSIDE_BLOCK,
-   ERROR,
+   FSM_ERROR,
 };
+
 struct GuiState {
    u64 lookbackDistance_s;
    int blockFsm;
@@ -139,6 +164,7 @@ init_gui_state(GuiState* gui) {
    gui->blockFsm = WAITING;
 }
 
+#if POSIX
 void
 print_errno_err(int err) {
    switch(err) {
@@ -162,6 +188,7 @@ print_errno() {
    int err = errno;
    print_errno_err(err);
 }
+#endif
 
 // TODO: Write a stb-style library that handles OS paths seamlessly
 // TODO: Memory mapping on Windows.
@@ -169,9 +196,9 @@ State*
 open_database(char* fname) {
    State* state = NULL;
 
-   bool clearMem = false;
+#if POSIX
    off_t fileLen = sizeof(State);
-
+   bool clearMem = false;
    int fd = open(fname, O_RDWR, S_IRWXU);
    if (fd == -1) {
       int err = errno;
@@ -193,6 +220,7 @@ open_database(char* fname) {
 
    if (fd != -1) {
       void* p = mmap(NULL, fileLen, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+
       if (p == MAP_FAILED) {
          print_errno();
       }
@@ -204,6 +232,9 @@ open_database(char* fname) {
       }
       close(fd);
    }
+#elif defined(__WIN32)
+#error woo
+#endif
    return state;
 }
 
@@ -282,19 +313,55 @@ fname_at_binary(char* fname, sz lenFname) {
    u32 intLen = lenFname;
    _NSGetExecutablePath(fname, &intLen);
    /* Remove the executable name */ {
-      char* last_slash = fname;
+      char* lastSlash = fname;
       for(char* iter = fname; *iter != '\0'; ++iter) {
          if (*iter == '/') {
-            last_slash = iter;
+            lastSlash = iter;
          }
       }
-      *(last_slash+1) = '\0';
+      *(lastSlash+1) = '\0';
    }
    strncat(fname, "/", lenFname);
    strncat(fname, buffer, lenFname);
 }
 
 #endif // __MACH__
+
+#if defined(_WIN32)
+void
+fname_at_binary(char* fname, sz lenFname) {
+    char* tmp = calloc(1, lenFname);  // store the fname here
+    strcpy(tmp, fname);
+
+    DWORD pathLen = GetModuleFileNameA(NULL, fname, (DWORD)lenFname);
+    if (pathLen <= lenFname)
+    {
+       {  // Remove the exe name
+          char* lastSlash = fname;
+          for ( char* iter = fname;
+                *iter != '\0';
+                ++iter ) {
+             if ( *iter == '\\' ) {
+                lastSlash = iter;
+             }
+          }
+          *(lastSlash+1) = '\0';
+       }
+    }
+
+    strcat(fname, tmp);
+    free(tmp);
+}
+void
+show_message_box(char* info, char* title)
+{
+   MessageBoxA( NULL, //_In_opt_ HWND    hWnd,
+                (LPCSTR)info, // _In_opt_ LPCTSTR lpText,
+                (LPCSTR)title,// _In_opt_ LPCTSTR lpCaption,
+                MB_OK//_In_     UINT    uType
+              );
+}
+#endif
 
 void
 set_style(struct nk_context* nk) {
@@ -465,7 +532,7 @@ main() {
                   }
                   if (endBlock) {
                      if (now - blockBegin >= 65536) {
-                        gui.blockFsm = ERROR;
+                        gui.blockFsm = FSM_ERROR;
                         errorMessage = "time block too long!";
                      }
                      else {
@@ -476,7 +543,7 @@ main() {
                      }
                   }
                }
-               else if (gui.blockFsm == ERROR) {
+               else if (gui.blockFsm == FSM_ERROR) {
                   nk_layout_row_dynamic(nk, 30, 2);
                   char errmsg[MsgLen] = Zero;
                   snprintf(errmsg, MsgLen, "Error: %s", errorMessage);
