@@ -1,6 +1,7 @@
 @echo off
 
 if not exist build mkdir build
+copy DroidSans.ttf build\DroidSans.ttf
 
 if not exist glfw\build (
    cd glfw

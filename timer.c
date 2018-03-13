@@ -146,7 +146,7 @@ typedef u32       bool;
    Type(State);
 #pragma pack(pop)
 
-enum blockFsm {
+enum BlockFsm {
    WAITING,
    INSIDE_BLOCK,
    FSM_ERROR,
@@ -191,7 +191,6 @@ print_errno() {
 #endif
 
 // TODO: Write a stb-style library that handles OS paths seamlessly
-// TODO: Memory mapping on Windows.
 State*
 open_database(char* fname) {
    State* state = NULL;
@@ -232,8 +231,28 @@ open_database(char* fname) {
       }
       close(fd);
    }
-#elif defined(__WIN32)
-#error woo
+#elif defined(_WIN32)
+   HANDLE fileHandle = CreateFile(fname,
+                                  GENERIC_READ | GENERIC_WRITE,
+                                  0 /*no sharing*/,
+                                  NULL,
+                                  OPEN_ALWAYS,
+                                  FILE_ATTRIBUTE_NORMAL,
+                                  0);
+
+   HANDLE fileMap = CreateFileMapping(fileHandle,
+                                   NULL,
+                                   PAGE_READWRITE,
+                                   0,
+                                   sizeof(State),
+                                   NULL);
+
+   state = MapViewOfFile(fileMap, FILE_MAP_WRITE, 0,0,0);
+   if (fileMap) {
+      printf("wooot\n");
+   }
+
+
 #endif
    return state;
 }
@@ -397,8 +416,38 @@ set_style(struct nk_context* nk) {
    nk_style_from_table(nk, table);
 }
 
+#if defined(_WIN32)
+
+typedef enum _MONITOR_DPI_TYPE {
+  MDT_EFFECTIVE_DPI  = 0,
+  MDT_ANGULAR_DPI    = 1,
+  MDT_RAW_DPI        = 2,
+  MDT_DEFAULT        = MDT_EFFECTIVE_DPI
+} MONITOR_DPI_TYPE;
+
+
+typedef enum _PROCESS_DPI_AWARENESS {
+  PROCESS_DPI_UNAWARE            = 0,
+  PROCESS_SYSTEM_DPI_AWARE       = 1,
+  PROCESS_PER_MONITOR_DPI_AWARE  = 2
+} PROCESS_DPI_AWARENESS;
+
+typedef HRESULT GetDpiForMonitorProc (_In_  HMONITOR         hmonitor,
+                                      _In_  MONITOR_DPI_TYPE dpiType,
+                                      _Out_ UINT             *dpiX,
+                                      _Out_ UINT             *dpiY);
+#endif
+
+#if defined(_WIN32)
+
+int CALLBACK WinMain(HINSTANCE hInstance,
+                     HINSTANCE hPrevInstance,
+                     LPSTR     lpCmdLine,
+                     int       nCmdShow) {
+#else
 int
 main() {
+#endif
    char dbPath[MsgLen] = "db"; {
       fname_at_binary(dbPath, MsgLen);
    }
@@ -410,7 +459,36 @@ main() {
       fprintf(stderr, "Could not open database.\n");
    }
    else {
+#define UI(val) (ui_scale*(val))
+      // TODO: Grab UI scale from Windows
+      float ui_scale = 1;
       int width = 500, height=150;
+
+#if defined(_WIN32)
+
+    HMODULE shcore = LoadLibrary("Shcore.dll");
+    if (shcore) {
+       GetDpiForMonitorProc* GetDpiForMonitor = GetProcAddress(shcore, "GetDpiForMonitor");
+       if (GetDpiForMonitor) {
+          RECT rect = {
+             .left = 0,
+             .right = width,
+             .top = 0,
+             .bottom = height,
+          };
+
+          HMONITOR hMon = MonitorFromRect(&rect, MONITOR_DEFAULTTONEAREST);
+          int dpix, dpiy;
+          GetDpiForMonitor(hMon, MDT_EFFECTIVE_DPI, &dpix, &dpiy);
+          ui_scale = dpix / 96.0;
+       }
+    }
+
+    width = UI(width);
+    height = UI(height);
+
+#endif
+
       glfwSetErrorCallback(error);
       glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 2);
       glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 1);
@@ -424,13 +502,15 @@ main() {
          glfwSwapInterval(1);
 
          struct nk_context* nk = nk_glfw3_init(window, NK_GLFW3_INSTALL_CALLBACKS);
+
          /*NK font atlas*/ {
+            int font_size = 14;
             char fontPath[MsgLen] = "DroidSans.ttf"; {
                fname_at_binary(fontPath, MsgLen);
             }
             struct nk_font_atlas *atlas;
             nk_glfw3_font_stash_begin(&atlas);
-            struct nk_font *droid = nk_font_atlas_add_from_file(atlas, fontPath, 14, 0);
+            struct nk_font *droid = nk_font_atlas_add_from_file(atlas, fontPath, font_size * ui_scale, 0);
             nk_glfw3_font_stash_end();
             // nk_style_load_all_cursors(nk, atlas->cursors);
             nk_style_set_font(nk, &droid->handle);
@@ -443,7 +523,7 @@ main() {
          GuiState gui; {
             init_gui_state(&gui);
          }
-         static int buttonWidth = 135;
+         int buttonWidth = UI(135);
 
          while (!glfwWindowShouldClose(window)) {
             u64 now = (u64)time(0);
@@ -483,29 +563,29 @@ main() {
                      snprintf(elapsedMsg, MsgLen, "Time logged in past %s: %s", timeRoughly, timeStr);
                   }
                   // nk_layout_row_static(nk, 20, width, 0);  /*Vertical space*/
-                  nk_layout_row_begin(nk, NK_STATIC, 30, 4); {
-                     nk_layout_row_push(nk, 50);
+                  nk_layout_row_begin(nk, NK_STATIC, UI(30), 4); {
+                     nk_layout_row_push(nk, UI(50));
                      nk_label(nk, "Window:", NK_TEXT_LEFT);
 
-                     nk_layout_row_push(nk, 60);
+                     nk_layout_row_push(nk, UI(60));
                      if (nk_button_label(nk, "More")) {
                         gui.lookbackDistance_s *= 2;
                      }
-                     nk_layout_row_push(nk, 60);
+                     nk_layout_row_push(nk, UI(60));
                      if (nk_button_label(nk, "1 hour")) {
                         gui.lookbackDistance_s = Hours(1);
                      }
 
-                     nk_layout_row_push(nk, 250);
+                     nk_layout_row_push(nk, UI(250));
                      nk_label(nk, elapsedMsg, NK_TEXT_CENTERED);
                      nk_layout_row_end(nk);
                   }
 
-                  nk_layout_row_dynamic(nk, 30, 1); {
+                  nk_layout_row_dynamic(nk, UI(30), 1); {
                      nk_label(nk, "Timer", NK_TEXT_LEFT);
                   }
 
-                  nk_layout_row_static(nk, 30, buttonWidth, 1); {
+                  nk_layout_row_static(nk, UI(30), buttonWidth, 1); {
                      if (nk_button_label(nk, "Begin Time Block.")) {
                         gui.blockFsm = INSIDE_BLOCK;
                         blockBegin = time(0);
@@ -519,14 +599,14 @@ main() {
                      endBlock = true;
                   }
                   /*draw elapsed time*/ {
-                     nk_layout_row_dynamic(nk, 30, 1);
+                     nk_layout_row_dynamic(nk, UI(30), 1);
                      time_t now = time(NULL);
                      u32 relnow = now - blockBegin;
                      char msg[MsgLen] = Zero;
                      time_pretty(msg,MsgLen, (u64)relnow);
                      nk_label(nk, msg, NK_TEXT_CENTERED);
                   }
-                  nk_layout_row_static(nk, 30, buttonWidth, 2);
+                  nk_layout_row_static(nk, UI(30), buttonWidth, 2);
                   if (nk_button_label(nk, "End Time Block.")) {
                      endBlock = true;
                   }
@@ -544,7 +624,7 @@ main() {
                   }
                }
                else if (gui.blockFsm == FSM_ERROR) {
-                  nk_layout_row_dynamic(nk, 30, 2);
+                  nk_layout_row_dynamic(nk, UI(30), 2);
                   char errmsg[MsgLen] = Zero;
                   snprintf(errmsg, MsgLen, "Error: %s", errorMessage);
                   nk_label(nk, errmsg, NK_TEXT_CENTERED);

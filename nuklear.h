@@ -1,4 +1,5 @@
 /*/// # Nuklear
+ *
 /// ![](https://cloud.githubusercontent.com/assets/8057201/11761525/ae06f0ca-a0c6-11e5-819d-5610b25f6ef4.gif)
 ///
 /// ## Contents
@@ -2676,7 +2677,7 @@ NK_API void nk_group_scrolled_end(struct nk_context*);
  *
  *                                  TREE
  *
- * ============================================================================= 
+ * =============================================================================
 /// ### Tree
 /// Trees represent two different concept. First the concept of a collapsable
 /// UI section that can be either in a hidden or visibile state. They allow the UI
@@ -17312,7 +17313,8 @@ nk_do_property(nk_flags *ws,
         length = len;
         dst = buffer;
     } else {
-        switch (variant->kind) {
+      num_len = 0;
+      switch (variant->kind) {
         default: break;
         case NK_PROPERTY_INT:
             nk_itoa(string, variant->value.i);
