@@ -15,4 +15,6 @@ if not exist glfw\build (
 set glfw_lib=..\glfw\build\src\Release\glfw3.lib
 cd build
 cl.exe /Wall /Zi /MD /FC /Od /I..\glfw\include ..\timer.c %glfw_lib% OpenGL32.lib Gdi32.lib ole32.lib User32.lib Shell32.lib
+set err=%errorlevel%
 cd ..
+exit /b %err%

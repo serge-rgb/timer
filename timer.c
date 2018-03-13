@@ -377,7 +377,7 @@ show_message_box(char* info, char* title)
    MessageBoxA( NULL, //_In_opt_ HWND    hWnd,
                 (LPCSTR)info, // _In_opt_ LPCTSTR lpText,
                 (LPCSTR)title,// _In_opt_ LPCTSTR lpCaption,
-                MB_OK//_In_     UINT    uType
+                MB_OK | MB_TOPMOST//_In_     UINT    uType
               );
 }
 #endif
